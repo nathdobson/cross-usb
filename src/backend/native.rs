@@ -1,6 +1,7 @@
 use crate::usb::{
-    ControlIn, ControlOut, ControlType, UsbDeviceInfo, UsbDevice, UsbInterface, Recipient, Error,
+    ControlIn, ControlOut, ControlType, Error, Recipient, UsbDevice, UsbDeviceInfo, UsbInterface,
 };
+use std::time::Duration;
 
 #[derive(Clone, Debug)]
 pub struct DeviceInfo {
@@ -58,10 +59,8 @@ impl DeviceFilter {
     }
 }
 
-pub async fn get_device(
-    device_filters: Vec<DeviceFilter>
-) -> Result<DeviceInfo, Error> {
-    let devices = nusb::list_devices().unwrap();
+pub async fn get_device(device_filters: Vec<DeviceFilter>) -> Result<DeviceInfo, Error> {
+    let devices = nusb::list_devices().await.unwrap();
 
     let mut device_info = None;
     for prelim_dev_inf in devices {
@@ -107,7 +106,7 @@ pub async fn get_device(
 pub async fn get_device_list(
     device_filters: Vec<DeviceFilter>,
 ) -> Result<impl Iterator<Item = DeviceInfo>, Error> {
-    let devices_info = nusb::list_devices().unwrap();
+    let devices_info = nusb::list_devices().await?;
 
     let mut devices = Vec::new();
     for prelim_dev_inf in devices_info {
@@ -157,7 +156,7 @@ impl UsbDeviceInfo for DeviceInfo {
     type Device = Device;
 
     async fn open(self) -> Result<Self::Device, Error> {
-        match self.device_info.open() {
+        match self.device_info.open().await {
             Ok(dev) => Ok(Self::Device {
                 device_info: self,
                 device: dev,
@@ -195,31 +194,25 @@ impl UsbDevice for Device {
     type Interface = Interface;
 
     async fn open_interface(&self, number: u8) -> Result<Self::Interface, Error> {
-        let interface = match self.device.claim_interface(number) {
+        let interface = match self.device.claim_interface(number).await {
             Ok(inter) => inter,
             Err(err) => return Err(Error::CommunicationError(err.to_string())),
         };
 
-        Ok(Interface {
-            interface,
-            number
-        })
+        Ok(Interface { interface, number })
     }
 
     async fn detach_and_open_interface(&self, number: u8) -> Result<Self::Interface, Error> {
-        let interface = match self.device.detach_and_claim_interface(number) {
+        let interface = match self.device.detach_and_claim_interface(number).await {
             Ok(inter) => inter,
             Err(err) => return Err(Error::CommunicationError(err.to_string())),
         };
 
-        Ok(Interface {
-            interface,
-            number
-        })
+        Ok(Interface { interface, number })
     }
 
     async fn reset(&self) -> Result<(), Error> {
-        match self.device.reset() {
+        match self.device.reset().await {
             Ok(_) => Ok(()),
             Err(err) => Err(Error::CommunicationError(err.to_string())),
         }
@@ -262,7 +255,7 @@ impl Drop for Device {
 
 impl<'a> UsbInterface<'a> for Interface {
     async fn control_in(&self, data: ControlIn) -> Result<Vec<u8>, Error> {
-        let result = match self.interface.control_in(data.into()).await.into_result() {
+        let result = match self.interface.control_in(data.into(), Duration::MAX).await {
             Ok(res) => res,
             Err(_) => return Err(Error::TransferError),
         };
@@ -270,15 +263,15 @@ impl<'a> UsbInterface<'a> for Interface {
         Ok(result)
     }
 
-    async fn control_out(&self, data: ControlOut<'a>) -> Result<usize, Error> {
-        match self.interface.control_out(data.into()).await.into_result() {
-            Ok(bytes) => Ok(bytes.actual_length()),
+    async fn control_out(&self, data: ControlOut<'a>) -> Result<(), Error> {
+        match self.interface.control_out(data.into(),Duration::MAX).await {
+            Ok(bytes) => Ok(()),
             Err(_) => Err(Error::TransferError),
         }
     }
 
     async fn bulk_in(&self, endpoint: u8, length: usize) -> Result<Vec<u8>, Error> {
-        let request_buffer = nusb::transfer::RequestBuffer::new(length);
+        let request_buffer = nusb::transfer::Buffer::new(length);
 
         match self
             .interface
@@ -301,6 +294,10 @@ impl<'a> UsbInterface<'a> for Interface {
             Ok(len) => Ok(len.actual_length()),
             Err(_) => Err(Error::TransferError),
         }
+    }
+
+    fn interface_number(&self) -> u8 {
+        self.interface.interface_number()
     }
 
     /*

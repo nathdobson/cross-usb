@@ -2,6 +2,7 @@
 //! This module contains the traits and associated functions and
 //! structs which allow for USB communication.
 
+use nusb::ErrorKind;
 use thiserror::Error;
 
 /// Information about a USB device before claiming it.
@@ -98,6 +99,8 @@ pub trait UsbInterface<'a> {
     /// a slice, and returns a [Result] containing the number of bytes transferred
     async fn bulk_out(&self, endpoint: u8, data: &[u8]) -> Result<usize, Error>;
 
+    fn interface_number(&self) -> u8;
+
     /* TODO: Figure out interrupt transfers on Web USB
     /// A USB interrupt in transfer (device to host).
     /// Takes in an endpoint and a buffer to fill
@@ -132,6 +135,15 @@ pub enum Error {
     /// reconnected to.
     #[error("device no longer valid")]
     Invalid,
+
+    #[error("native error")]
+    NativeError(nusb::Error),
+}
+
+impl From<nusb::Error> for Error {
+    fn from(err: nusb::Error) -> Self {
+        Error::NativeError(err)
+    }
 }
 
 /// The type of USB control transfer.

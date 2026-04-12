@@ -46,7 +46,7 @@ features = [
 
 # Non-wasm deps
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-nusb = "0.1"
+nusb = "0.2.3"
 
 [package.metadata.wasm-pack.profile.dev.wasm-bindgen]
 dwarf-debug-info = true
