@@ -1,6 +1,10 @@
+use crate::usb::UsbEndpoint;
 use crate::usb::{
     ControlIn, ControlOut, ControlType, Error, Recipient, UsbDevice, UsbDeviceInfo, UsbInterface,
 };
+use nusb::transfer::Buffer;
+use nusb::transfer::Bulk;
+use nusb::transfer::In;
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
@@ -24,6 +28,14 @@ impl std::fmt::Debug for Device {
 pub struct Interface {
     interface: nusb::Interface,
     number: u8,
+}
+
+pub struct InEndpoint {
+    endpoint: nusb::Endpoint<Bulk, In>,
+}
+
+pub struct OutEndpoint {
+    endpoint: nusb::Endpoint<Bulk, In>,
 }
 
 impl std::fmt::Debug for Interface {
@@ -156,13 +168,11 @@ impl UsbDeviceInfo for DeviceInfo {
     type Device = Device;
 
     async fn open(self) -> Result<Self::Device, Error> {
-        match self.device_info.open().await {
-            Ok(dev) => Ok(Self::Device {
-                device_info: self,
-                device: dev,
-            }),
-            Err(err) => Err(Error::CommunicationError(err.to_string())),
-        }
+        let dev = self.device_info.open().await?;
+        Ok(Self::Device {
+            device_info: self,
+            device: dev,
+        })
     }
 
     async fn vendor_id(&self) -> u16 {
@@ -194,28 +204,19 @@ impl UsbDevice for Device {
     type Interface = Interface;
 
     async fn open_interface(&self, number: u8) -> Result<Self::Interface, Error> {
-        let interface = match self.device.claim_interface(number).await {
-            Ok(inter) => inter,
-            Err(err) => return Err(Error::CommunicationError(err.to_string())),
-        };
-
+        let interface = self.device.claim_interface(number).await?;
         Ok(Interface { interface, number })
     }
 
     async fn detach_and_open_interface(&self, number: u8) -> Result<Self::Interface, Error> {
-        let interface = match self.device.detach_and_claim_interface(number).await {
-            Ok(inter) => inter,
-            Err(err) => return Err(Error::CommunicationError(err.to_string())),
-        };
+        let interface = self.device.detach_and_claim_interface(number).await?;
 
         Ok(Interface { interface, number })
     }
 
     async fn reset(&self) -> Result<(), Error> {
-        match self.device.reset().await {
-            Ok(_) => Ok(()),
-            Err(err) => Err(Error::CommunicationError(err.to_string())),
-        }
+        self.device.reset().await?;
+        Ok(())
     }
 
     async fn forget(&self) -> Result<(), Error> {
@@ -255,33 +256,32 @@ impl Drop for Device {
 
 impl<'a> UsbInterface<'a> for Interface {
     async fn control_in(&self, data: ControlIn) -> Result<Vec<u8>, Error> {
-        let result = match self.interface.control_in(data.into(), Duration::MAX).await {
-            Ok(res) => res,
-            Err(_) => return Err(Error::TransferError),
-        };
-
+        let result = self
+            .interface
+            .control_in(data.into(), Duration::MAX)
+            .await?;
         Ok(result)
     }
 
     async fn control_out(&self, data: ControlOut<'a>) -> Result<(), Error> {
-        match self.interface.control_out(data.into(),Duration::MAX).await {
-            Ok(bytes) => Ok(()),
-            Err(_) => Err(Error::TransferError),
-        }
+        self.interface
+            .control_out(data.into(), Duration::MAX)
+            .await?;
+        Ok(())
     }
 
-    async fn bulk_in(&self, endpoint: u8, length: usize) -> Result<Vec<u8>, Error> {
-        let request_buffer = nusb::transfer::Buffer::new(length);
+    fn interface_number(&self) -> u8 {
+        self.interface.interface_number()
+    }
+}
 
-        match self
-            .interface
-            .bulk_in(endpoint, request_buffer)
-            .await
-            .into_result()
-        {
-            Ok(res) => Ok(res),
-            Err(_) => Err(Error::TransferError),
-        }
+impl UsbEndpoint for InEndpoint {
+    async fn bulk_in(&self, endpoint: u8, length: usize) -> Result<Vec<u8>, Error> {
+        let endpoint = self.interface.endpoint::<Bulk, In>(endpoint)?;
+        let buffer = Buffer::new(length);
+        endpoint.submit(buffer);
+        let buffer = endpoint.next_complete().await.into_result()?;
+        Ok(buffer.to_vec())
     }
 
     async fn bulk_out(&self, endpoint: u8, data: &[u8]) -> Result<usize, Error> {
@@ -295,29 +295,6 @@ impl<'a> UsbInterface<'a> for Interface {
             Err(_) => Err(Error::TransferError),
         }
     }
-
-    fn interface_number(&self) -> u8 {
-        self.interface.interface_number()
-    }
-
-    /*
-    async fn interrupt_in(&self, endpoint: u8, length: usize) -> Result<Vec<u8>, UsbError> {
-        let buf = Vec::new();
-        let buffer = nusb::transfer::RequestBuffer::reuse(buf, length);
-
-        match self.interface.interrupt_in(endpoint, buffer).await.into_result() {
-            Ok(res) => Ok(res),
-            Err(_) => Err(UsbError::TransferError),
-        }
-    }
-
-    async fn interrupt_out(&self, endpoint: u8, buf: Vec<u8>) -> Result<usize, UsbError> {
-        match self.interface.interrupt_out(endpoint, buf).await.into_result() {
-            Ok(res) => Ok(res.actual_length()),
-            Err(_) => Err(UsbError::TransferError),
-        }
-    }
-    */
 }
 
 impl From<ControlIn> for nusb::transfer::ControlIn {

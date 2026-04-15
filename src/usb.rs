@@ -2,7 +2,7 @@
 //! This module contains the traits and associated functions and
 //! structs which allow for USB communication.
 
-use nusb::ErrorKind;
+use nusb::Endpoint;
 use thiserror::Error;
 
 /// Information about a USB device before claiming it.
@@ -82,22 +82,16 @@ pub trait UsbDevice {
 
 /// A specific interface of a USB device
 pub trait UsbInterface<'a> {
+    type InEndpoint;
+    type OutEndpoint;
+
+    async fn endpoint(&self, index: u8) -> Result<Self::Endpoint, Error>;
     /// A USB control in transfer (device to host)
     /// Returns a [Result] with the bytes in a `Vec<u8>`
     async fn control_in(&self, data: ControlIn) -> Result<Vec<u8>, Error>;
 
     /// A USB control out transfer (host to device)
     async fn control_out(&self, data: ControlOut<'a>) -> Result<usize, Error>;
-
-    /// A USB bulk in transfer (device to host)
-    /// It takes in a bulk endpoint to send to along with the length of
-    /// data to read, and returns a [Result] with the bytes
-    async fn bulk_in(&self, endpoint: u8, length: usize) -> Result<Vec<u8>, Error>;
-
-    /// A USB bulk out transfer (host to device).
-    /// It takes in a bulk endpoint to send to along with some data as
-    /// a slice, and returns a [Result] containing the number of bytes transferred
-    async fn bulk_out(&self, endpoint: u8, data: &[u8]) -> Result<usize, Error>;
 
     fn interface_number(&self) -> u8;
 
@@ -112,20 +106,26 @@ pub trait UsbInterface<'a> {
     */
 }
 
+pub trait UsbInEndpoint {
+    /// A USB bulk in transfer (device to host)
+    /// It takes in a bulk endpoint to send to along with the length of
+    /// data to read, and returns a [Result] with the bytes
+    async fn bulk_in(&self, length: usize) -> Result<Vec<u8>, Error>;
+}
+
+pub trait UsbOutEndpoint {
+    /// A USB bulk out transfer (host to device).
+    /// It takes in a bulk endpoint to send to along with some data as
+    /// a slice, and returns a [Result] containing the number of bytes transferred
+    async fn bulk_out(&self, data: &[u8]) -> Result<usize, Error>;
+}
+
 /// An error from a USB interface
 #[derive(Error, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Error {
     /// The device was not found.
     #[error("device not found")]
     DeviceNotFound,
-
-    /// An error occured during a transfer.
-    #[error("device transfer failed")]
-    TransferError,
-
-    /// There was an error communicating with the device.
-    #[error("device communication failed")]
-    CommunicationError(String),
 
     /// The device was disconnected and can no longer be accesed.
     #[error("device disconnected")]
@@ -136,14 +136,13 @@ pub enum Error {
     #[error("device no longer valid")]
     Invalid,
 
+    #[cfg(not(target_family = "wasm"))]
     #[error("native error")]
-    NativeError(nusb::Error),
-}
+    NusbError(#[from] nusb::Error),
 
-impl From<nusb::Error> for Error {
-    fn from(err: nusb::Error) -> Self {
-        Error::NativeError(err)
-    }
+    #[cfg(not(target_family = "wasm"))]
+    #[error("native error")]
+    TransferError(#[from] nusb::transfer::TransferError),
 }
 
 /// The type of USB control transfer.
